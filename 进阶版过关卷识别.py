@@ -10,7 +10,35 @@ from PIL import Image
 # 从 Pillow 库（Python 图像处理库，是经典库 PIL 的分支）中导入 Image 模块。Pillow 用于图像的打开、编辑、保存等操作（比如调整图像大小、格式转换、像素级处理）
 import tempfile
 # 导入 tempfile 模块，用于创建临时文件 / 临时目录（比如在程序运行时临时存储 PDF 转换后的图像，程序结束后自动清理，避免占用永久存储空间）
+import pytesseract
+import re
 
+# 配置Tesseract路径
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
+# 全局统一的识别区域坐标（后续修改只需改这里！）
+STUDENT_ID_REGION = (480, 110, 660, 220)  # 学号区域：(x1, y1, x2, y2)
+PASS_ID_REGION = (600, 3330, 885, 3385)   # 过关编号区域：(x1, y1, x2, y2)
+
+# 新增：预览功能开关
+PREVIEW_ENABLED = False  # True启用预览，False禁用预览
+
+def preview_roi(image, x1, y1, x2, y2, region_name):
+    """显示指定区域的截图预览"""
+    if not PREVIEW_ENABLED:
+        return
+
+    # 提取ROI区域
+    roi = image[y1:y2, x1:x2].copy()
+
+    # 绘制边框以便识别
+    cv2.rectangle(roi, (0, 0), (roi.shape[1] - 1, roi.shape[0] - 1), (0, 255, 0), 2)
+
+    # 显示预览窗口
+    window_name = f"预览: {region_name} (按任意键继续)"
+    cv2.imshow(window_name, resize_with_aspect_ratio(roi))
+    cv2.waitKey(0)  # 等待用户按键
+    cv2.destroyWindow(window_name)
 
 def resize_with_aspect_ratio(image, max_width=1200, max_height=1000):
     """保持宽高比缩放图像，方便预览"""
@@ -66,7 +94,7 @@ def detect_markers(image):
     thresh = cv2.erode(thresh, kernel, iterations=1)
     # 对膨胀后的图像进行腐蚀操作（缩小前景区域）
     # 这段代码是图像预处理流程：通过 “灰度转换→高斯模糊→反二值化→膨胀→腐蚀”，减少图像噪声、增强目标（定位标记）的轮廓特征，为后续 “检测并筛选定位点（顶 2 圆、底 2 方）” 的核心操作做准备
-    
+
     # 找轮廓
     contours, _ = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     # cv2.findContours：OpenCV 查找轮廓的核心函数。
@@ -280,12 +308,104 @@ def process_pdf(pdf_path):
             os.remove(pdf_path)
             os.rename(temp_path, pdf_path)
 
-            return True, f"成功处理PDF: {pdf_path}，共{len(processed_pages)}页"
+            # 使用第一页进行OCR识别（如果有多页）
+            # 转换第一页为OpenCV格式用于OCR
+            last_page_cv = cv2.cvtColor(np.array(processed_pages[0]), cv2.COLOR_RGB2BGR)
+            # 调用OCR识别并重命名
+            new_path, rename_msg = rename_pdf_based_on_ocr(pdf_path, last_page_cv)
+
+            return True, f"成功处理PDF: {pdf_path}，共{len(processed_pages)}页\n"
         else:
             return False, f"PDF文件{pdf_path}没有页面内容"
 
     except Exception as e:
         return False, f"处理PDF {pdf_path} 时出错: {str(e)}"
+
+def extract_text_from_region(image, x1, y1, x2, y2):
+    """从图像的指定区域提取文本"""
+    # 提取ROI区域（感兴趣区域）
+    roi = image[y1:y2, x1:x2]
+
+    # 预处理提高识别率：转为灰度图并二值化
+    gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    _, thresh_roi = cv2.threshold(gray_roi, 150, 255, cv2.THRESH_BINARY_INV)
+
+    # 识别文本
+    custom_config = r'--oem 3 --psm 6'  # OCR引擎模式和页面分割模式
+    text = pytesseract.image_to_string(thresh_roi, config=custom_config)
+
+    # 去除空白字符和特殊符号
+    return re.sub(r'\W+', '', text)
+
+def extract_text_from_region_with_preview(image, x1, y1, x2, y2, region_name):
+    """带预览功能的区域文本提取"""
+    # 显示预览
+    preview_roi(image, x1, y1, x2, y2, region_name)
+
+    # 调用原有函数提取文本
+    return extract_text_from_region(image, x1, y1, x2, y2)
+
+
+def recognize_student_id(image):
+    """识别学号（4位数字）"""
+    # 复用全局坐标，不再重复输入
+    x1, y1, x2, y2 = STUDENT_ID_REGION
+    text = extract_text_from_region(image, x1, y1, x2, y2)
+    # 原有验证逻辑不变
+    if re.match(r'^\d{4}$', text):
+        return text
+    return None
+
+
+def recognize_pass_id(image):
+    """识别过关编号（8位数字）"""
+    # 复用全局坐标，不再重复输入
+    x1, y1, x2, y2 = PASS_ID_REGION
+    text = extract_text_from_region(image, x1, y1, x2, y2)
+    # 原有验证逻辑不变
+    if re.match(r'^\d{8}$', text):
+        return text
+    return None
+
+
+def rename_pdf_based_on_ocr(pdf_path, corrected_image):
+    """根据OCR识别结果重命名PDF文件"""
+    dir_name = os.path.dirname(pdf_path)
+    base_name = os.path.basename(pdf_path)
+    file_name = base_name  # 简化文件名变量
+
+    # ---------------------- 学号识别：复用全局坐标 ----------------------
+    # 从全局常量获取坐标，调用extract_text_from_region
+    x1_s, y1_s, x2_s, y2_s = STUDENT_ID_REGION
+    student_raw_text = extract_text_from_region_with_preview(corrected_image, x1_s, y1_s, x2_s, y2_s, "学号区域")
+    # 调用原有函数验证（逻辑不变）
+    student_id = recognize_student_id(corrected_image)
+    # 打印原始结果和验证结果
+    print(f"【文件 {file_name}】")
+    print(f"  学号原始识别结果: {repr(student_raw_text)}")  # repr()显示特殊字符
+    print(f"  学号验证结果: {'有效（4位数字）' if student_id else '无效'}\n")
+
+    # ---------------------- 过关编号识别：复用全局坐标 ----------------------
+    # 从全局常量获取坐标，调用extract_text_from_region
+    x1_p, y1_p, x2_p, y2_p = PASS_ID_REGION
+    pass_raw_text = extract_text_from_region_with_preview(corrected_image, x1_p, y1_p, x2_p, y2_p, "过关编号区域")
+    # 调用原有函数验证（逻辑不变）
+    pass_id = recognize_pass_id(corrected_image)
+    # 打印原始结果和验证结果
+    print(f"  过关编号原始识别结果: {repr(pass_raw_text)}")
+    print(f"  过关编号验证结果: {'有效（8位数字）' if pass_id else '无效'}\n")
+
+    # ---------------------- 原有重命名逻辑（完全不变） ----------------------
+    if student_id:
+        base_name = f"[{student_id}]-{base_name}"
+    if pass_id:
+        base_name = f"({pass_id})-{base_name}"
+
+    new_path = os.path.join(dir_name, base_name)
+    if new_path != pdf_path:
+        os.rename(pdf_path, new_path)
+        return new_path, f"已重命名为: {base_name}"
+    return pdf_path, "未进行重命名"
 
 
 def main():
@@ -305,5 +425,4 @@ def main():
 
 
 if __name__ == "__main__":
-
     main()
