@@ -11,6 +11,7 @@ from PIL import Image
 import tempfile
 # 导入 tempfile 模块，用于创建临时文件 / 临时目录（比如在程序运行时临时存储 PDF 转换后的图像，程序结束后自动清理，避免占用永久存储空间）
 import pytesseract
+import shutil
 import re
 
 # 配置Tesseract路径
@@ -554,7 +555,8 @@ def rename_pdf_based_on_ocr(pdf_path, corrected_image):
 
     new_path = os.path.join(dir_name, base_name)
     if new_path != pdf_path:
-        os.rename(pdf_path, new_path)
+        # 用shutil.move替换os.rename
+        shutil.move(pdf_path, new_path)
         return new_path, f"已重命名为: {base_name}"
     return pdf_path, "未进行重命名"
 
@@ -566,37 +568,30 @@ def process_pdf(pdf_path):
         pages = convert_from_path(pdf_path, dpi=300)
         processed_pages = []
 
-        # 处理每一页
+        # 处理每一页（省略不变的代码）
         for page in pages:
-            # 转换为OpenCV格式
             open_cv_image = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
-
-            # 检测定位点
             detected_corners = detect_markers(open_cv_image)
-
-            # 校正为A4 300dpi
             corrected_img = correct_to_a4_300dpi(open_cv_image, detected_corners)
-
-            # 转换回PIL格式
             pil_image = Image.fromarray(cv2.cvtColor(corrected_img, cv2.COLOR_BGR2RGB))
             processed_pages.append(pil_image)
 
-        # 保存处理后的PDF（覆盖原文件）
         if processed_pages:
-            # 先保存到临时文件，再替换原文件，避免处理失败时损坏原文件
+            # 保存到临时文件
             with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
                 temp_path = temp_file.name
 
             processed_pages[0].save(temp_path, save_all=True, append_images=processed_pages[1:])
 
-            # 删除原文件并替换
-            os.remove(pdf_path)
-            os.rename(temp_path, pdf_path)
+            # 关键修改：用shutil.move替换os.rename和os.remove（支持跨卷移动）
+            # 先删除目标文件（如果存在）
+            if os.path.exists(pdf_path):
+                os.remove(pdf_path)
+            # 使用shutil.move处理跨卷移动
+            shutil.move(temp_path, pdf_path)
 
-            # 使用第一页进行OCR识别（如果有多页）
-            # 转换第一页为OpenCV格式用于OCR
+            # 后续OCR识别代码不变
             last_page_cv = cv2.cvtColor(np.array(processed_pages[0]), cv2.COLOR_RGB2BGR)
-            # 调用OCR识别并重命名
             new_path, rename_msg = rename_pdf_based_on_ocr(pdf_path, last_page_cv)
 
             return True, f"成功处理PDF: {pdf_path}，共{len(processed_pages)}页\n"
