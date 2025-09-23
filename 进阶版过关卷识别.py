@@ -21,7 +21,7 @@ STUDENT_ID_REGION = (480, 110, 660, 220)  # 学号区域：(x1, y1, x2, y2)
 PASS_ID_REGION = (600, 3330, 885, 3385)   # 过关编号区域：(x1, y1, x2, y2)
 
 # 新增：预览功能开关
-PREVIEW_ENABLED = True  # True启用预览，False禁用预览
+PREVIEW_ENABLED = False  # True启用预览，False禁用预览
 
 # 成绩区域坐标 (x1, y1, x2, y2)
 GRADE_REGIONS = {
@@ -33,7 +33,24 @@ GRADE_REGIONS = {
     'E': (1250, 1020, 1310, 1080)
 }
 # 红色像素检测阈值（可调整）
-RED_PIXEL_THRESHOLD = 0.05  # 10%以上红色像素即认为选中
+RED_PIXEL_THRESHOLD = 0.01  # 10%以上红色像素即认为选中
+
+# 涂卡式学号识别配置（2B铅笔填涂，基于黑色像素比例判断）
+CARD_WIDTH = 50          # 涂卡区域宽度（x方向增量，固定）
+CARD_HEIGHT = 35         # 涂卡区域高度（y方向增量，固定）
+CARD_BLACK_THRESHOLD = 0.4  # 黑色像素占比阈值（>80%判定为填涂）
+CARD_BINARY_THRESHOLD = 127 # 二值化阈值（低于此值判定为黑色）
+# 涂卡区域字典：key=区域编号（10-49），value=左上角坐标(x,y)
+STUDENT_ID_CARD_REGIONS = {
+    10: (230, 855), 11: (325, 855), 12: (420, 855), 13: (515, 855), 14: (605, 855),
+    15: (700, 855), 16: (795, 855), 17: (890, 855), 18: (985, 855), 19: (1075, 855),
+    20: (230, 920), 21: (325, 920), 22: (420, 920), 23: (515, 920), 24: (605, 920),
+    25: (700, 920), 26: (795, 920), 27: (890, 920), 28: (985, 920), 29: (1075, 920),
+    30: (230, 985), 31: (325, 985), 32: (420, 985), 33: (515, 985), 34: (605, 985),
+    35: (700, 985), 36: (795, 985), 37: (890, 985), 38: (985, 985), 39: (1075, 985),
+    40: (230, 1050), 41: (325, 1050), 42: (420, 1050), 43: (515, 1050), 44: (605, 1050),
+    45: (700, 1050), 46: (795, 1050), 47: (890, 1050), 48: (985, 1050), 49: (1075, 1050)
+}
 
 def preview_roi(image, x1, y1, x2, y2, region_name):
     """显示指定区域的截图预览"""
@@ -381,6 +398,113 @@ def recognize_pass_id(image):
     return None
 
 
+def detect_black_pixels(image, x1, y1, x2, y2, region_name):
+    """检测指定区域内黑色像素比例（用于涂卡识别）"""
+    # 提取涂卡区域ROI（感兴趣区域）
+    roi = image[y1:y2, x1:x2].copy()
+
+    # 预处理：灰度转换→二值化（突出黑色涂卡部分）
+    gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    # 二值化：低于阈值的像素设为255（黑色前景），高于设为0（白色背景）
+    _, thresh_roi = cv2.threshold(gray_roi, CARD_BINARY_THRESHOLD, 255, cv2.THRESH_BINARY_INV)
+
+    # 计算黑色像素占比（二值化后非零像素即为黑色）
+    total_pixels = thresh_roi.size
+    black_pixels = cv2.countNonZero(thresh_roi)
+    ratio = black_pixels / total_pixels if total_pixels > 0 else 0
+
+    # 预览功能：显示二值化后的涂卡区域（方便调试）
+    if PREVIEW_ENABLED:
+        preview_roi(thresh_roi, 0, 0, thresh_roi.shape[1], thresh_roi.shape[0],
+                    f"{region_name}（黑占比: {ratio:.2f}）")
+
+    return ratio
+
+
+def recognize_student_id_by_card(image):
+    """通过涂卡方式识别4位学号（返回有效学号或None）"""
+    # 定义学号每一位对应的涂卡区域范围（十位=位序：1=第1位，2=第2位...）
+    digit_region_ranges = [
+        (10, 19),  # 第1位（区域10-19）→ 数字0-9
+        (20, 29),  # 第2位（区域20-29）→ 数字0-9
+        (30, 39),  # 第3位（区域30-39）→ 数字0-9
+        (40, 49)  # 第4位（区域40-49）→ 数字0-9
+    ]
+    student_id_digits = []  # 存储每一位识别到的有效数字
+
+    # 逐位识别涂卡结果
+    for digit_order, (start_num, end_num) in enumerate(digit_region_ranges, 1):
+        print(f"  涂卡识别：正在处理学号第{digit_order}位（区域{start_num}-{end_num}）")
+        detected_digits = []  # 该位中超过黑色阈值的数字
+
+        # 遍历当前位的所有涂卡区域
+        for region_num in range(start_num, end_num + 1):
+            # 获取区域左上角坐标，计算右下角坐标
+            if region_num not in STUDENT_ID_CARD_REGIONS:
+                print(f"    警告：涂卡区域{region_num}未定义，跳过")
+                continue
+            x1, y1 = STUDENT_ID_CARD_REGIONS[region_num]
+            x2 = x1 + CARD_WIDTH  # 自动推算右下角x（x+宽度）
+            y2 = y1 + CARD_HEIGHT  # 自动推算右下角y（y+高度）
+
+            # 计算当前区域黑色像素比例
+            digit = region_num % 10  # 区域编号个位=对应数字（10→0，11→1...）
+            region_name = f"学号第{digit_order}位-{region_num}（数字{digit}）"
+            black_ratio = detect_black_pixels(image, x1, y1, x2, y2, region_name)
+
+            # 判定是否为有效填涂（超过阈值）
+            if black_ratio >= CARD_BLACK_THRESHOLD:
+                detected_digits.append((digit, black_ratio))
+                print(f"    区域{region_num}（数字{digit}）黑占比{black_ratio:.2f}，符合条件")
+
+        # 校验当前位结果：仅允许1个有效数字
+        if len(detected_digits) == 1:
+            valid_digit = detected_digits[0][0]
+            student_id_digits.append(str(valid_digit))
+            print(f"  涂卡识别：学号第{digit_order}位确认→{valid_digit}")
+        elif len(detected_digits) > 1:
+            print(f"  涂卡识别失败：学号第{digit_order}位检测到{len(detected_digits)}个填涂区域")
+            return None  # 同一位多结果→无效
+        else:
+            print(f"  涂卡识别失败：学号第{digit_order}位未检测到填涂")
+            return None  # 同一位无结果→无效
+
+    # 组合4位数字为完整学号
+    if len(student_id_digits) == 4:
+        card_student_id = ''.join(student_id_digits)
+        print(f"  涂卡识别成功：学号={card_student_id}")
+        return card_student_id
+    else:
+        print("  涂卡识别失败：学号位数不足")
+        return None
+
+
+def get_final_student_id(ocr_id, card_id):
+    """对比OCR学号和涂卡学号，返回最终有效学号（None表示双无效）"""
+    print(f"\n  学号对比：OCR识别结果={ocr_id if ocr_id else '无效'}，涂卡识别结果={card_id if card_id else '无效'}")
+
+    # 按规则判定最终学号
+    if card_id and ocr_id:
+        # 规则1：双有效→一致用一致，不一致用涂卡
+        if card_id == ocr_id:
+            print(f"  最终学号：双识别一致→{card_id}")
+            return card_id
+        else:
+            print(f"  最终学号：双识别不一致，以涂卡为准→{card_id}")
+            return card_id
+    elif card_id and not ocr_id:
+        # 规则2：仅涂卡有效→用涂卡
+        print(f"  最终学号：仅涂卡有效→{card_id}")
+        return card_id
+    elif not card_id and ocr_id:
+        # 规则3：仅OCR有效→用OCR
+        print(f"  最终学号：仅OCR有效→{ocr_id}")
+        return ocr_id
+    else:
+        # 规则4：双无效→无学号
+        print(f"  最终学号：双识别均无效→无")
+        return None
+
 def rename_pdf_based_on_ocr(pdf_path, corrected_image):
     """根据OCR识别结果重命名PDF文件"""
     dir_name = os.path.dirname(pdf_path)
@@ -397,10 +521,18 @@ def rename_pdf_based_on_ocr(pdf_path, corrected_image):
     x1_s, y1_s, x2_s, y2_s = STUDENT_ID_REGION
     student_raw_text = extract_text_from_region_with_preview(corrected_image, x1_s, y1_s, x2_s, y2_s, "学号区域")
     # 调用原有函数验证（逻辑不变）
-    student_id = recognize_student_id(corrected_image)
+    ocr_student_id = recognize_student_id(corrected_image)
     # 打印原始结果和验证结果
     print(f"  学号原始识别结果: {repr(student_raw_text)}")  # repr()显示特殊字符
-    print(f"  学号验证结果: {'有效（4位数字）' if student_id else '无效'}")
+    print(f"  学号验证结果: {'有效（4位数字）' if ocr_student_id else '无效'}")
+
+    # ---------------------- 学号识别：涂卡方式 ----------------------
+    print(f"\n【文件 {file_name}】涂卡式学号识别开始：")
+    card_student_id = recognize_student_id_by_card(corrected_image)
+
+    # ---------------------- 确定最终学号 ----------------------
+    final_student_id = get_final_student_id(ocr_student_id, card_student_id)
+    print(f"  最终有效学号：{final_student_id if final_student_id else '无'}")
 
     # ---------------------- 过关编号识别：复用全局坐标 ----------------------
     # 从全局常量获取坐标，调用extract_text_from_region
@@ -412,11 +544,11 @@ def rename_pdf_based_on_ocr(pdf_path, corrected_image):
     print(f"  过关编号原始识别结果: {repr(pass_raw_text)}")
     print(f"  过关编号验证结果: {'有效（8位数字）' if pass_id else '无效'}\n")
 
-    # ---------------------- 原有重命名逻辑（完全不变） ----------------------
+    # ---------------------- 原有重命名逻辑（仅修改学号部分） ----------------------
     if grade:
         base_name = f"《{grade}》-{base_name}"
-    if student_id:
-        base_name = f"[{student_id}]-{base_name}"
+    if final_student_id:  # 替换为最终学号
+        base_name = f"[{final_student_id}]-{base_name}"
     if pass_id:
         base_name = f"({pass_id})-{base_name}"
 
