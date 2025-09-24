@@ -18,6 +18,9 @@ from datetime import datetime
 import time
 import glob
 
+# 固定根路径（拆分和识别文件的存放根目录）
+FIXED_BASE_PATH = r"\\192.168.110.248\guoguan"
+
 # 配置Tesseract路径
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
@@ -56,6 +59,21 @@ STUDENT_ID_CARD_REGIONS = {
     40: (230, 1050), 41: (325, 1050), 42: (420, 1050), 43: (515, 1050), 44: (605, 1050),
     45: (700, 1050), 46: (795, 1050), 47: (890, 1050), 48: (985, 1050), 49: (1075, 1050)
 }
+
+def select_function():
+    """显示功能选择菜单并返回用户选择"""
+    print("请选择运行模式：")
+    print("0 - 同时运行拆分+识别（默认流程）")
+    print("1 - 仅运行拆分功能（含监控）")
+    print("2 - 仅运行识别分类功能（含监控）")
+    while True:
+        try:
+            choice = input("请输入选项（0/1/2）：").strip()
+            if choice in ["0", "1", "2"]:
+                return int(choice)
+            print("输入无效，请重新输入！")
+        except Exception:
+            print("输入错误，请重新输入！")
 
 def preview_roi(image, x1, y1, x2, y2, region_name):
     """显示指定区域的截图预览"""
@@ -96,40 +114,106 @@ def get_today_date_str():
     return datetime.now().strftime("%m%d")
 
 
-def create_directory_structure(base_path):
-    """创建所需的目录结构"""
+def create_directory_structure():
+    """创建所需的目录结构（基于固定根路径）"""
     today = get_today_date_str()
-    split_dir = os.path.join(base_path, today, "拆分文件")
-    keep_dir = os.path.join(base_path, today, "留存")
-    # 新增两个目录
-    pre_identified_dir = os.path.join(base_path, today, "预识别")
-    pre_non_file_dir = os.path.join(base_path, today, "预非文件")
+    split_dir = os.path.join(FIXED_BASE_PATH, today, "拆分文件")
+    keep_dir = os.path.join(FIXED_BASE_PATH, today, "留存")
+    pre_identified_dir = os.path.join(FIXED_BASE_PATH, today, "预识别")
+    pre_non_file_dir = os.path.join(FIXED_BASE_PATH, today, "预非文件")
 
     # 创建目录（如果不存在）
     os.makedirs(split_dir, exist_ok=True)
     os.makedirs(keep_dir, exist_ok=True)
-    os.makedirs(pre_identified_dir, exist_ok=True)  # 新增
-    os.makedirs(pre_non_file_dir, exist_ok=True)    # 新增
+    os.makedirs(pre_identified_dir, exist_ok=True)
+    os.makedirs(pre_non_file_dir, exist_ok=True)
 
-    return split_dir, keep_dir, pre_identified_dir, pre_non_file_dir  # 修改返回值
+    return split_dir, keep_dir, pre_identified_dir, pre_non_file_dir
 
-def select_pdf_files():
-    """选择PDF文件（支持多选）"""
+# 修改1：替换选择文件函数为选择文件夹函数
+def select_directory():
+    """选择处理的根目录"""
     root = tk.Tk()
     root.withdraw()
-    # 隐藏刚创建的根窗口（因为只需要 “文件选择对话框”，不需要显示主窗口，避免界面冗余）
-    file_paths = filedialog.askopenfilenames(
-        title="选择PDF文件",
-        filetypes=[("PDF文件", "*.pdf"), ("所有文件", "*.*")]
+    dir_path = filedialog.askdirectory(
+        title="选择PDF文件所在的根目录"
     )
+    return dir_path if dir_path and os.path.isdir(dir_path) else None
 
-    # 过滤无效路径
-    valid_paths = [path for path in file_paths if os.path.isfile(path)]
-    return valid_paths if valid_paths else None
-    # 函数返回值：
-    # 如果 valid_paths 非空（选到了有效 PDF 文件），返回有效路径列表；
-    # 如果 valid_paths 为空（没选到有效文件），返回 None（方便调用者判断是否选到了有效文件）
+# 修改2：获取目录下所有PDF文件
+def get_pdf_files_in_dir(dir_path):
+    """获取指定目录下所有PDF文件"""
+    if not dir_path or not os.path.isdir(dir_path):
+        return []
+    # 只获取目录下的PDF文件（不递归子目录）
+    pdf_files = glob.glob(os.path.join(dir_path, "*.pdf"))
+    # 过滤掉临时文件和隐藏文件
+    return [f for f in pdf_files if not os.path.basename(f).startswith(('~', '.'))]
 
+# def select_pdf_files():
+#     """选择PDF文件（支持多选）"""
+#     root = tk.Tk()
+#     root.withdraw()
+#     # 隐藏刚创建的根窗口（因为只需要 “文件选择对话框”，不需要显示主窗口，避免界面冗余）
+#     file_paths = filedialog.askopenfilenames(
+#         title="选择PDF文件",
+#         filetypes=[("PDF文件", "*.pdf"), ("所有文件", "*.*")]
+#     )
+#
+#     # 过滤无效路径
+#     valid_paths = [path for path in file_paths if os.path.isfile(path)]
+#     return valid_paths if valid_paths else None
+#     # 函数返回值：
+#     # 如果 valid_paths 非空（选到了有效 PDF 文件），返回有效路径列表；
+#     # 如果 valid_paths 为空（没选到有效文件），返回 None（方便调用者判断是否选到了有效文件）
+
+def process_only_split(pdf_path):
+    """仅执行拆分功能（不处理识别）"""
+    split_dir, keep_dir, _, _ = create_directory_structure()  # 使用固定路径
+    # 拆分PDF
+    success, result = split_pdf_by_two_pages(pdf_path, split_dir)
+    if not success:
+        print(f"拆分失败: {result}")
+        return
+    # 移动源文件到留存目录
+    try:
+        dest_path = os.path.join(keep_dir, os.path.basename(pdf_path))
+        if os.path.exists(dest_path):
+            os.remove(dest_path)
+        shutil.move(pdf_path, dest_path)
+        print(f"源文件已移动到: {dest_path}")
+    except Exception as e:
+        print(f"移动源文件失败: {str(e)}")
+
+def process_only_recognize(pdf_path):
+    """仅执行识别分类功能（不拆分，直接处理传入的PDF）"""
+    _, _, pre_identified_dir, pre_non_file_dir = create_directory_structure()  # 使用固定路径
+    # 直接处理PDF
+    success, message = process_pdf(pdf_path)
+    print(message)
+    # 获取新路径并分类移动
+    new_path = pdf_path
+    if success and "已重命名为: " in message:
+        new_name = message.split("已重命名为: ")[1].strip()
+        new_dir = os.path.dirname(pdf_path)
+        new_path = os.path.join(new_dir, new_name)
+        if not os.path.exists(new_path):
+            new_path = pdf_path
+    # 分类移动
+    try:
+        if os.path.exists(new_path):
+            file_name = os.path.basename(new_path)
+            has_id = bool(re.search(r'\[\d{4}\]', file_name))
+            has_pass = bool(re.search(r'\(\d{8}\)', file_name))
+            has_grade = bool(re.search(r'《[ABCDE]》', file_name))
+            dest_dir = pre_identified_dir if (has_id and has_pass and has_grade) else pre_non_file_dir
+            dest_path = os.path.join(dest_dir, file_name)
+            if os.path.exists(dest_path):
+                os.remove(dest_path)
+            shutil.move(new_path, dest_path)
+            print(f"文件已移动到: {dest_path}")
+    except Exception as e:
+        print(f"移动文件时出错: {str(e)}")
 
 def split_pdf_by_two_pages(pdf_path, output_dir):
     """将PDF按每两页拆分，并返回拆分后的文件路径列表"""
@@ -661,259 +745,84 @@ def process_pdf(pdf_path):
     except Exception as e:
         return False, f"处理PDF {pdf_path} 时出错: {str(e)}"
 
-
-def monitor_and_process(base_path, interval=300):
-    """后台监测指定路径并处理新文件"""
-    print(f"\n进入后台监测模式，将每隔{interval}秒检查新文件...")
-    print(f"监测路径: {base_path}")
-    print("按Ctrl+C可退出程序")
-
-    # 记录已处理的文件路径，避免重复处理
+def monitor_by_choice(choice, monitor_dir, interval=10):
+    """根据选择的功能进行监控（监控用户选择的目录，处理后文件放固定路径）"""
+    print(f"\n进入后台监控模式，每隔{interval}秒检查新文件...")
+    print(f"监控路径: {monitor_dir}")
     processed_files = set()
-
     while True:
         try:
-            # 查找指定路径下的所有PDF文件
-            pdf_files = glob.glob(os.path.join(base_path, "*.pdf"))
+            # 扫描监控目录下的PDF文件
+            pdf_files = glob.glob(os.path.join(monitor_dir, "*.pdf"))
             new_files = [f for f in pdf_files if f not in processed_files]
-
             if new_files:
                 print(f"\n发现{len(new_files)}个新文件，开始处理...")
                 for pdf_path in new_files:
                     print(f"\n处理新文件: {pdf_path}")
-
-                    # 1. 拆分PDF
-                    split_dir, keep_dir, pre_identified_dir, pre_non_file_dir = create_directory_structure(base_path)
-                    success, result = split_pdf_by_two_pages(pdf_path, split_dir)
-                    if not success:
-                        print(f"拆分失败: {result}")
-                        continue
-
-                    split_files = result
-                    print(f"成功拆分为{len(split_files)}个PDF文件")
-
-                    # 2. 将源文件移动到留存目录
-                    try:
-                        dest_path = os.path.join(keep_dir, os.path.basename(pdf_path))
-                        if os.path.exists(dest_path):
-                            os.remove(dest_path)
-                        shutil.move(pdf_path, dest_path)
-                        print(f"源文件已移动到: {dest_path}")
-                    except Exception as e:
-                        print(f"移动源文件失败: {str(e)}")
-                        continue
-
-                    # 3. 处理拆分后的每个PDF文件
-                    for split_file in split_files:
-                        print(f"\n处理拆分后的文件: {split_file}")
-                        success, message = process_pdf(split_file)
-                        print(message)
-
-                        # 获取重命名后的新路径
-                        new_path = split_file
-                        if success and "已重命名为: " in message:
-                            new_name = message.split("已重命名为: ")[1].strip()
-                            new_dir = os.path.dirname(split_file)
-                            new_path = os.path.join(new_dir, new_name)
-                            if not os.path.exists(new_path):
-                                new_path = split_file
-
-                        # 分类移动
-                        try:
-                            if os.path.exists(new_path):
-                                file_name = os.path.basename(new_path)
-                                has_id = bool(re.search(r'\[\d{4}\]', file_name))
-                                has_pass = bool(re.search(r'\(\d{8}\)', file_name))
-                                has_grade = bool(re.search(r'《[ABCDE]》', file_name))
-
-                                dest_dir = pre_identified_dir if (
-                                            has_id and has_pass and has_grade) else pre_non_file_dir
-                                dest_path = os.path.join(dest_dir, file_name)
-
-                                if os.path.exists(dest_path):
-                                    os.remove(dest_path)
-                                shutil.move(new_path, dest_path)
-                                print(f"文件已移动到: {dest_path}")
-                        except Exception as e:
-                            print(f"移动文件时出错: {str(e)}")
-
-                    # 标记为已处理
+                    if choice in [0, 1]:  # 拆分功能（拆到固定路径）
+                        process_only_split(pdf_path)
+                    if choice in [0, 2]:  # 识别功能
+                        if choice == 0:
+                            # 0模式：处理固定路径中的拆分文件
+                            today = get_today_date_str()
+                            split_dir = os.path.join(FIXED_BASE_PATH, today, "拆分文件")
+                            base_name = os.path.splitext(os.path.basename(pdf_path))[0]
+                            split_files = glob.glob(os.path.join(split_dir, f"{base_name}_split_*.pdf"))
+                            for f in split_files:
+                                process_only_recognize(f)
+                        else:
+                            # 2模式：处理监控目录中的文件
+                            process_only_recognize(pdf_path)
                     processed_files.add(pdf_path)
-
             else:
                 print(f"{time.ctime()} - 未发现新文件，等待下次检查...")
-
-            # 等待指定间隔时间
             time.sleep(interval)
-
         except KeyboardInterrupt:
-            print("\n用户中断，退出后台监测")
+            print("\n用户中断，退出监控")
             break
         except Exception as e:
-            print(f"监测过程出错: {str(e)}，将继续监测")
+            print(f"监控出错: {str(e)}，将继续运行")
             time.sleep(interval)
 
-# def main():
-#     pdf_paths = select_pdf_files()
-#     if not pdf_paths:
-#         print("未选择PDF文件，程序退出")
-#         return
-#
-#     print(f"已选择{len(pdf_paths)}个PDF文件，开始处理...")
-#
-#     # 基础路径
-#     base_path = r"\\192.168.110.248\guoguan"
-#
-#     # 创建目录结构
-#     split_dir, keep_dir, pre_identified_dir, pre_non_file_dir = create_directory_structure(base_path)
-#     print(f"拆分文件将保存到: {split_dir}")
-#     print(f"源文件将保存到: {keep_dir}")
-#     print(f"识别完整文件将保存到: {pre_identified_dir}")
-#     print(f"识别不完整文件将保存到: {pre_non_file_dir}")
-#
-#     # 处理每个选中的PDF文件
-#     for pdf_path in pdf_paths:
-#         print(f"\n处理文件: {pdf_path}")
-#
-#         # 拆分PDF
-#         success, result = split_pdf_by_two_pages(pdf_path, split_dir)
-#         if not success:
-#             print(f"拆分失败: {result}")
-#             continue
-#
-#         split_files = result
-#         print(f"成功拆分为{len(split_files)}个PDF文件")
-#
-#         # 将源文件移动到留存目录
-#         try:
-#             dest_path = os.path.join(keep_dir, os.path.basename(pdf_path))
-#             if os.path.exists(dest_path):
-#                 os.remove(dest_path)
-#             shutil.move(pdf_path, dest_path)
-#             print(f"源文件已移动到: {dest_path}")
-#         except Exception as e:
-#             print(f"移动源文件失败: {str(e)}")
-#             continue
-#
-#         # 处理拆分后的每个PDF文件
-#         for split_file in split_files:
-#             print(f"\n处理拆分后的文件: {split_file}")
-#             success, message = process_pdf(split_file)
-#             print(message)
-#
-#             # 获取重命名后的新路径
-#             new_path = split_file  # 初始为拆分后的原始路径
-#             if success and "已重命名为: " in message:
-#                 # 从message中提取新文件名
-#                 new_name = message.split("已重命名为: ")[1].strip()
-#                 # 构建新文件的完整路径（与原拆分文件同目录）
-#                 new_dir = os.path.dirname(split_file)
-#                 new_path = os.path.join(new_dir, new_name)
-#                 # 验证新路径是否真的存在（防止解析错误）
-#                 if not os.path.exists(new_path):
-#                     new_path = split_file  # 若不存在，回退到原始路径
-#
-#             # 分类移动逻辑（基于新路径）
-#             try:
-#                 if os.path.exists(new_path):  # 确保文件存在再移动
-#                     file_name = os.path.basename(new_path)
-#                     # 检查文件名是否包含全部3类信息（学号、过关编号、成绩）
-#                     has_id = bool(re.search(r'\[\d{4}\]', file_name))  # 匹配 [1234] 格式学号
-#                     has_pass = bool(re.search(r'\(\d{8}\)', file_name))  # 匹配 (12345678) 格式过关编号
-#                     has_grade = bool(re.search(r'《[ABCDE]》', file_name))  # 匹配 《A》 格式成绩
-#
-#                     # 决定目标目录
-#                     if has_id and has_pass and has_grade:
-#                         dest_dir = pre_identified_dir
-#                     else:
-#                         dest_dir = pre_non_file_dir
-#                     dest_path = os.path.join(dest_dir, file_name)
-#
-#                     # 移动前删除目标位置的同名文件（避免冲突）
-#                     if os.path.exists(dest_path):
-#                         os.remove(dest_path)
-#                     shutil.move(new_path, dest_path)
-#                     print(f"文件已移动到: {dest_path}")
-#                 else:
-#                     print(f"警告：文件 {new_path} 不存在，跳过移动")
-#             except Exception as e:
-#                 print(f"移动文件时出错: {str(e)}")
-#
-#     print("\n所有文件处理完成！")
+def main():
+    # 选择运行模式
+    choice = select_function()
+    # 选择文件夹（替换原文件选择）
+    target_dir = select_directory()
+    if not target_dir:
+        print("未选择任何目录，程序退出。")
+        return
 
-# 修改原main函数，在初始处理后进入监测模式
-def main_with_monitor():
-    # 先执行一次初始处理
-    pdf_paths = select_pdf_files()
-    if pdf_paths:
-        print(f"已选择{len(pdf_paths)}个PDF文件，开始初始处理...")
+    # 设置监控目录为选中的文件夹
+    monitor_dir = target_dir
+    print(f"已选择处理目录: {monitor_dir}")
 
-        base_path = r"\\192.168.110.248\guoguan"
-        split_dir, keep_dir, pre_identified_dir, pre_non_file_dir = create_directory_structure(base_path)
-        print(f"拆分文件将保存到: {split_dir}")
-        print(f"源文件将保存到: {keep_dir}")
-        print(f"识别完整文件将保存到: {pre_identified_dir}")
-        print(f"识别不完整文件将保存到: {pre_non_file_dir}")
+    # 获取目录下所有PDF文件
+    pdf_files = get_pdf_files_in_dir(monitor_dir)
+    if not pdf_files:
+        print(f"目录 {monitor_dir} 中未发现PDF文件，直接进入监控模式...")
+    else:
+        print(f"发现{len(pdf_files)}个PDF文件，开始处理...")
+        # 处理已发现的文件
+        for pdf_path in pdf_files:
+            print(f"\n开始处理文件: {pdf_path}")
+            if choice in [0, 1]:  # 拆分功能
+                process_only_split(pdf_path)
+            if choice in [0, 2]:  # 识别功能
+                if choice == 0:
+                    # 0模式：处理拆分后的文件（在固定路径中）
+                    today = get_today_date_str()
+                    split_dir = os.path.join(FIXED_BASE_PATH, today, "拆分文件")
+                    base_name = os.path.splitext(os.path.basename(pdf_path))[0]
+                    split_files = glob.glob(os.path.join(split_dir, f"{base_name}_split_*.pdf"))
+                    for f in split_files:
+                        process_only_recognize(f)
+                else:
+                    # 2模式：直接处理原文件
+                    process_only_recognize(pdf_path)
 
-        # 处理初始选择的文件
-        for pdf_path in pdf_paths:
-            print(f"\n处理文件: {pdf_path}")
-            success, result = split_pdf_by_two_pages(pdf_path, split_dir)
-            if not success:
-                print(f"拆分失败: {result}")
-                continue
-
-            split_files = result
-            print(f"成功拆分为{len(split_files)}个PDF文件")
-
-            # 移动源文件
-            try:
-                dest_path = os.path.join(keep_dir, os.path.basename(pdf_path))
-                if os.path.exists(dest_path):
-                    os.remove(dest_path)
-                shutil.move(pdf_path, dest_path)
-                print(f"源文件已移动到: {dest_path}")
-            except Exception as e:
-                print(f"移动源文件失败: {str(e)}")
-                continue
-
-            # 处理拆分文件
-            for split_file in split_files:
-                print(f"\n处理拆分后的文件: {split_file}")
-                success, message = process_pdf(split_file)
-                print(message)
-
-                new_path = split_file
-                if success and "已重命名为: " in message:
-                    new_name = message.split("已重命名为: ")[1].strip()
-                    new_dir = os.path.dirname(split_file)
-                    new_path = os.path.join(new_dir, new_name)
-                    if not os.path.exists(new_path):
-                        new_path = split_file
-
-                # 分类移动
-                try:
-                    if os.path.exists(new_path):
-                        file_name = os.path.basename(new_path)
-                        has_id = bool(re.search(r'\[\d{4}\]', file_name))
-                        has_pass = bool(re.search(r'\(\d{8}\)', file_name))
-                        has_grade = bool(re.search(r'《[ABCDE]》', file_name))
-
-                        dest_dir = pre_identified_dir if (has_id and has_pass and has_grade) else pre_non_file_dir
-                        dest_path = os.path.join(dest_dir, file_name)
-
-                        if os.path.exists(dest_path):
-                            os.remove(dest_path)
-                        shutil.move(new_path, dest_path)
-                        print(f"文件已移动到: {dest_path}")
-                except Exception as e:
-                    print(f"移动文件时出错: {str(e)}")
-
-        print("\n初始文件处理完成")
-
-    # 进入后台监测模式
-    base_monitor_path = r"\\192.168.110.248\guoguan"  # 监测的目标路径
-    monitor_and_process(base_monitor_path, 60)
+    # 进入监控模式（监控选中的文件夹）
+    monitor_by_choice(choice, monitor_dir)
 
 if __name__ == "__main__":
-    main_with_monitor()
+    main()
