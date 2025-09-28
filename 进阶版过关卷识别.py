@@ -64,8 +64,8 @@ def select_function():
     """显示功能选择菜单并返回用户选择"""
     print("请选择运行模式：")
     print("0 - 同时运行拆分+识别（默认流程）")
-    print("1 - 仅运行拆分功能（含监控）")
-    print("2 - 仅运行识别分类功能（含监控）")
+    print("1 - 仅运行拆分功能")
+    print("2 - 仅运行识别分类功能")
     while True:
         try:
             choice = input("请输入选项（0/1/2）：").strip()
@@ -205,7 +205,7 @@ def process_only_recognize(pdf_path):
             file_name = os.path.basename(new_path)
             has_id = bool(re.search(r'\[\d{4}\]', file_name))
             has_pass = bool(re.search(r'\(\d{8}\)', file_name))
-            has_grade = bool(re.search(r'《[ABCDE]》', file_name))
+            has_grade = bool(re.search(r'《[SABCDE]》', file_name))
             dest_dir = pre_identified_dir if (has_id and has_pass and has_grade) else pre_non_file_dir
             dest_path = os.path.join(dest_dir, file_name)
             if os.path.exists(dest_path):
