@@ -745,20 +745,19 @@ def process_pdf(pdf_path):
     except Exception as e:
         return False, f"处理PDF {pdf_path} 时出错: {str(e)}"
 
-def monitor_by_choice(choice, monitor_dir, interval=10):
+def monitor_by_choice(choice, monitor_dir, interval=300):
     """根据选择的功能进行监控（监控用户选择的目录，处理后文件放固定路径）"""
-    print(f"\n进入后台监控模式，每隔{interval}秒检查新文件...")
+    print(f"\n进入后台监控模式，每隔{interval}秒检查所有文件...")
     print(f"监控路径: {monitor_dir}")
-    processed_files = set()
+    # 移除processed_files集合，不再记录已处理文件
     while True:
         try:
-            # 扫描监控目录下的PDF文件
+            # 扫描监控目录下的所有PDF文件（不再筛选，每次都检查全部）
             pdf_files = glob.glob(os.path.join(monitor_dir, "*.pdf"))
-            new_files = [f for f in pdf_files if f not in processed_files]
-            if new_files:
-                print(f"\n发现{len(new_files)}个新文件，开始处理...")
-                for pdf_path in new_files:
-                    print(f"\n处理新文件: {pdf_path}")
+            if pdf_files:
+                print(f"\n发现{len(pdf_files)}个文件，开始处理...")
+                for pdf_path in pdf_files:
+                    print(f"\n处理文件: {pdf_path}")
                     if choice in [0, 1]:  # 拆分功能（拆到固定路径）
                         process_only_split(pdf_path)
                     if choice in [0, 2]:  # 识别功能
@@ -773,9 +772,8 @@ def monitor_by_choice(choice, monitor_dir, interval=10):
                         else:
                             # 2模式：处理监控目录中的文件
                             process_only_recognize(pdf_path)
-                    processed_files.add(pdf_path)
             else:
-                print(f"{time.ctime()} - 未发现新文件，等待下次检查...")
+                print(f"{time.ctime()} - 未发现PDF文件，等待下次检查...")
             time.sleep(interval)
         except KeyboardInterrupt:
             print("\n用户中断，退出监控")
