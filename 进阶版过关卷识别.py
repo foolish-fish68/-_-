@@ -150,23 +150,6 @@ def get_pdf_files_in_dir(dir_path):
     # 过滤掉临时文件和隐藏文件
     return [f for f in pdf_files if not os.path.basename(f).startswith(('~', '.'))]
 
-# def select_pdf_files():
-#     """选择PDF文件（支持多选）"""
-#     root = tk.Tk()
-#     root.withdraw()
-#     # 隐藏刚创建的根窗口（因为只需要 “文件选择对话框”，不需要显示主窗口，避免界面冗余）
-#     file_paths = filedialog.askopenfilenames(
-#         title="选择PDF文件",
-#         filetypes=[("PDF文件", "*.pdf"), ("所有文件", "*.*")]
-#     )
-#
-#     # 过滤无效路径
-#     valid_paths = [path for path in file_paths if os.path.isfile(path)]
-#     return valid_paths if valid_paths else None
-#     # 函数返回值：
-#     # 如果 valid_paths 非空（选到了有效 PDF 文件），返回有效路径列表；
-#     # 如果 valid_paths 为空（没选到有效文件），返回 None（方便调用者判断是否选到了有效文件）
-
 def process_only_split(pdf_path):
     """仅执行拆分功能（不处理识别）"""
     split_dir, keep_dir, _, _ = create_directory_structure()  # 使用固定路径
@@ -303,9 +286,9 @@ def detect_markers(image):
             circles.append((cX, cY))
             # 将圆形的中心坐标 (cx, cy) 添加到 circles 列表中
             # 注释掉预览相关代码
-            # cv2.circle(img_copy, (cX, cY), 10, (0, 255, 0), -1)
-            # cv2.putText(img_copy, f"Circle ({cX},{cY})", (cX + 10, cY),
-            #             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            cv2.circle(img_copy, (cX, cY), 10, (0, 255, 0), -1)
+            cv2.putText(img_copy, f"Circle ({cX},{cY})", (cX + 10, cY),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
             continue
 
         # 方形判断
@@ -365,9 +348,9 @@ def detect_markers(image):
                 cX, cY = int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"])
                 squares.append((cX, cY))
                 # 注释掉预览相关代码
-                # cv2.circle(img_copy, (cX, cY), 10, (0, 0, 255), -1)
-                # cv2.putText(img_copy, f"Square ({cX},{cY})", (cX + 10, cY),
-                #             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                cv2.circle(img_copy, (cX, cY), 10, (0, 0, 255), -1)
+                cv2.putText(img_copy, f"Square ({cX},{cY})", (cX + 10, cY),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
 
     # 按y坐标筛选
     if len(circles) > 2:
@@ -378,12 +361,12 @@ def detect_markers(image):
     # 验证数量
     if len(circles) != 2 or len(squares) != 2:
         # 注释掉预览相关代码
-        # print(f"筛选后：圆{len(circles)}个，方{len(squares)}个（需各2个）")
-        # cv2.imshow("检测调试", resize_with_aspect_ratio(img_copy))
-        # cv2.waitKey(0)
-        # cv2.destroyAllWindows()
+        if PREVIEW_ENABLED:
+            print(f"筛选后：圆{len(circles)}个，方{len(squares)}个（需各2个）")
+            cv2.imshow("检测调试", resize_with_aspect_ratio(img_copy))
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
         raise ValueError("标记数量不足")
-        # 后期检查是否需要增加异常捕获，以免遇到错误直接退出，不处理后续文件
 
     # 排序角点：左上→右上→右下→左下
     circles_sorted = sorted(circles, key=lambda p: p[0])
@@ -392,17 +375,18 @@ def detect_markers(image):
     bottom_left, bottom_right = squares_sorted
     corner_order = [top_left, top_right, bottom_right, bottom_left]
 
-    # 注释掉预览相关代码
-    # 标记目标点
-    # for i, (x, y) in enumerate(corner_order):
-    #     cv2.circle(img_copy, (x, y), 15, (255, 0, 0), 2)
-    #     cv2.putText(img_copy, f"P{i + 1}", (x - 10, y - 20),
-    #                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 0), 2)
+    # 仅当预览开关开启时才显示定位点识别结果
+    if PREVIEW_ENABLED:
+        # 标记目标点
+        for i, (x, y) in enumerate(corner_order):
+            cv2.circle(img_copy, (x, y), 15, (255, 0, 0), 2)
+            cv2.putText(img_copy, f"P{i + 1}", (x - 10, y - 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 0), 2)
 
-    # 显示筛选结果
-    # cv2.imshow("定位点识别结果", resize_with_aspect_ratio(img_copy))
-    # cv2.waitKey(0)
-    # cv2.destroyAllWindows()
+        # 显示筛选结果
+        cv2.imshow("定位点识别结果", resize_with_aspect_ratio(img_copy))
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
 
     return corner_order
 
@@ -713,13 +697,24 @@ def process_pdf(pdf_path):
         pages = convert_from_path(pdf_path, dpi=300)
         processed_pages = []
 
-        # 处理每一页
+        # 处理每一页（识别成功则校正，失败则保留原始页面）
         for page in pages:
-            open_cv_image = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
-            detected_corners = detect_markers(open_cv_image)
-            corrected_img = correct_to_a4_300dpi(open_cv_image, detected_corners)
-            pil_image = Image.fromarray(cv2.cvtColor(corrected_img, cv2.COLOR_BGR2RGB))
-            processed_pages.append(pil_image)
+            try:
+                open_cv_image = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
+                detected_corners = detect_markers(open_cv_image)  # 此步骤会在识别失败时抛异常
+                corrected_img = correct_to_a4_300dpi(open_cv_image, detected_corners)
+                pil_image = Image.fromarray(cv2.cvtColor(corrected_img, cv2.COLOR_BGR2RGB))
+                processed_pages.append(pil_image)
+                print("当前页面识别成功，已进行校正处理")
+            except ValueError as e:
+                if "标记数量不足" in str(e):
+                    print(f"当前页面定位点识别失败（2圆2方不完整），保留原始页面")
+                else:
+                    print(f"当前页面处理出错: {e}，保留原始页面")
+                processed_pages.append(page)  # 保留原始页面
+            except Exception as e:
+                print(f"当前页面处理发生意外错误: {e}，保留原始页面")
+                processed_pages.append(page)  # 保留原始页面
 
         if processed_pages:
             # 保存到临时文件
@@ -728,13 +723,11 @@ def process_pdf(pdf_path):
             processed_pages[0].save(temp_path, save_all=True, append_images=processed_pages[1:])
 
             # 用shutil.move替换os.rename和os.remove（支持跨卷移动）
-            # 先删除目标文件（如果存在）
             if os.path.exists(pdf_path):
                 os.remove(pdf_path)
-            # 使用shutil.move处理跨卷移动
             shutil.move(temp_path, pdf_path)
 
-            # 后续OCR识别
+            # 后续OCR识别（无论页面是否校正成功都执行）
             last_page_cv = cv2.cvtColor(np.array(processed_pages[0]), cv2.COLOR_RGB2BGR)
             new_path, rename_msg = rename_pdf_based_on_ocr(pdf_path, last_page_cv)
 
