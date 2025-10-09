@@ -375,6 +375,40 @@ def detect_markers(image):
     bottom_left, bottom_right = squares_sorted
     corner_order = [top_left, top_right, bottom_right, bottom_left]
 
+    # 新增：计算四边形四个角的角度并验证
+    def calculate_angle(p1, p2, p3):
+        """计算p2点的角度（由p1-p2-p3组成）"""
+        v1 = np.array([p1[0] - p2[0], p1[1] - p2[1]])
+        v2 = np.array([p3[0] - p2[0], p3[1] - p2[1]])
+        dot_product = np.dot(v1, v2)
+        norm_v1 = np.linalg.norm(v1)
+        norm_v2 = np.linalg.norm(v2)
+        if norm_v1 == 0 or norm_v2 == 0:
+            return 0.0
+        cos_angle = dot_product / (norm_v1 * norm_v2)
+        # 防止数值计算导致的微小越界
+        cos_angle = np.clip(cos_angle, -1.0, 1.0)
+        angle_rad = np.arccos(cos_angle)
+        return np.degrees(angle_rad)
+
+    # 计算四个角的角度
+    angles = [
+        calculate_angle(corner_order[3], corner_order[0], corner_order[1]),  # 左上角
+        calculate_angle(corner_order[0], corner_order[1], corner_order[2]),  # 右上角
+        calculate_angle(corner_order[1], corner_order[2], corner_order[3]),  # 右下角
+        calculate_angle(corner_order[2], corner_order[3], corner_order[0])  # 左下角
+    ]
+
+    # 检查所有角度是否在80-100度之间
+    valid_angles = all(80 <= angle <= 100 for angle in angles)
+    if not valid_angles:
+        if PREVIEW_ENABLED:
+            print(f"角度验证失败：{angles}（需均在80-100度之间）")
+            cv2.imshow("角度验证失败", resize_with_aspect_ratio(img_copy))
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
+        raise ValueError("标记点角度不符合要求")
+
     # 仅当预览开关开启时才显示定位点识别结果
     if PREVIEW_ENABLED:
         # 标记目标点
